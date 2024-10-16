@@ -112,7 +112,6 @@ pub async fn stark_proof_worker(app_state: web::Data<AppState>) {
             },
             _ => {
                 println!("failed to prove (stark).");
-                continue;
             }
         }
         elapsed_time = start_time.elapsed();
@@ -222,7 +221,6 @@ pub async fn groth_proof_worker(app_state: web::Data<AppState>) {
             },
             _ => {
                 println!("failed to prove (groth16)");
-                continue;
             }
         }
         elapsed_time = start_time.elapsed();
