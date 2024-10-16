@@ -97,17 +97,26 @@ pub async fn stark_proof_worker(app_state: web::Data<AppState>) {
         stdin.write_proof(latest_proof_inner, vk.vk);
 
         let start_time = std::time::Instant::now();
-        let resultant_proof = prover_client.prove(&pk, stdin).compressed().run().expect("could not prove");
-        let elapsed_time = start_time.elapsed();
-        println!("Elapsed time for CompressedSTARK proof generation: {:?}", elapsed_time);
-        // Write the updated net head to the newest_header_file
-        std::fs::write(app_state.app_dir.join("newest_header.json"), serde_json::to_string(&header_to_try).expect("could not json serialize net head after proving")).expect("Failed to write newest_header.json");
-        // Write the new proof to the proof_file
-        std::fs::write(app_state.app_dir.join("newest_proof.json"), serde_json::to_string(&resultant_proof).expect("could not json serialize new proof")).expect("Failed to write newest_proof.json");
-        // update the values in the server state
-        *app_state.newest_header.lock().unwrap() = header_to_try;
-        *app_state.latest_proof.lock().unwrap() = resultant_proof;
-        println!("proved header height {:?}", app_state.newest_header.lock().unwrap().height());
+        let resultant_proof = prover_client.prove(&pk, stdin).compressed().run();
+        let elapsed_time: Duration;
+        match resultant_proof {
+            Ok(rp) => {
+                // Write the updated net head to the newest_header_file
+                std::fs::write(app_state.app_dir.join("newest_header.json"), serde_json::to_string(&header_to_try).expect("could not json serialize net head after proving")).expect("Failed to write newest_header.json");
+                // Write the new proof to the proof_file
+                std::fs::write(app_state.app_dir.join("newest_proof.json"), serde_json::to_string(&rp).expect("could not json serialize new proof")).expect("Failed to write newest_proof.json");
+                // update the values in the server state
+                *app_state.newest_header.lock().unwrap() = header_to_try;
+                *app_state.latest_proof.lock().unwrap() = rp;
+                println!("proved header height {:?}", app_state.newest_header.lock().unwrap().height());
+            },
+            _ => {
+                println!("failed to prove (stark).");
+                continue;
+            }
+        }
+        elapsed_time = start_time.elapsed();
+        println!("elapsed time: {:?}", elapsed_time);
         let five_minute = std::time::Duration::from_mins(5);
         let sleep_duration = five_minute.saturating_sub(elapsed_time);
         std::thread::sleep(sleep_duration);
@@ -181,34 +190,43 @@ pub async fn groth_proof_worker(app_state: web::Data<AppState>) {
         stdin.write_proof(latest_proof_inner, vk.vk);
 
         let start_time = std::time::Instant::now();
-        let resultant_groth16_proof = prover_client.prove(&pk, stdin).groth16().run().expect("could not prove");
-        let elapsed_time = start_time.elapsed();
-        println!("Elapsed time for groth16 proof generation: {:?}", elapsed_time);
-        // Write the updated net head to the newest_header_file
-        match std::fs::write(app_state.app_dir.join("newest_groth16_proved_header.json"), serde_json::to_string(&header_to_try).expect("could not serialize")) {
-            Ok(_) => println!("Successfully wrote newest_groth16_proved_header.json"),
-            Err(e) => eprintln!("Failed to write newest_groth16_proved_header.json: {}", e),
-        }
+        let resultant_groth16_proof = prover_client.prove(&pk, stdin).groth16().run();
+        let elapsed_time: Duration;
+        match resultant_groth16_proof {
+            Ok(rp) => {
+                // Write the updated net head to the newest_header_file
+                match std::fs::write(app_state.app_dir.join("newest_groth16_proved_header.json"), serde_json::to_string(&header_to_try).expect("could not serialize")) {
+                    Ok(_) => println!("Successfully wrote newest_groth16_proved_header.json"),
+                    Err(e) => eprintln!("Failed to write newest_groth16_proved_header.json: {}", e),
+                }
 
-        match std::fs::write(app_state.app_dir.join("newest_groth16_proof.json"), serde_json::to_string(&resultant_groth16_proof).expect("could not json serialize new groth16 proof")) {
-            Ok(_) => println!("Successfully wrote newest_groth16_proof.json"),
-            Err(e) => eprintln!("Failed to write newest_groth16_proof.json: {}", e),
+                match std::fs::write(app_state.app_dir.join("newest_groth16_proof.json"), serde_json::to_string(&rp).expect("could not json serialize new groth16 proof")) {
+                    Ok(_) => println!("Successfully wrote newest_groth16_proof.json"),
+                    Err(e) => eprintln!("Failed to write newest_groth16_proof.json: {}", e),
+                }
+                let groth_inner = rp.clone().proof.try_as_groth_16().expect("not a groth16 proof");
+                // Write the new proof to the proof_file
+                match std::fs::write(app_state.app_dir.join("newest_groth16_proof_inner.json"), serde_json::to_string(&groth_inner).expect("could not json serialize new groth16 proof")) {
+                    Ok(_) => println!("Successfully wrote newest_groth16_proof_inner.json"),
+                    Err(e) => eprintln!("Failed to write newest_groth16_proof_inner.json: {}", e),
+                }
+                // Write a bincode version as well
+                match std::fs::write(app_state.app_dir.join("newest_groth16_proof_inner.bin"), bincode::serialize(&groth_inner).expect("could not json serialize new groth16 proof")) {
+                    Ok(_) => println!("Successfully wrote newest_groth16_proof_inner.bin"),
+                    Err(e) => eprintln!("Failed to write newest_groth16_proof_inner.bin: {}", e),
+                }
+                // update the values in the server state
+                *app_state.latest_groth16_header.lock().unwrap() = Some(header_to_try);
+                *app_state.latest_groth16_proof.lock().unwrap() = Some(rp);
+                println!("groth16 proved header height {:?}", app_state.newest_header.lock().unwrap().height());
+            },
+            _ => {
+                println!("failed to prove (groth16)");
+                continue;
+            }
         }
-        let groth_inner = resultant_groth16_proof.clone().proof.try_as_groth_16().expect("not a groth16 proof");
-        // Write the new proof to the proof_file
-        match std::fs::write(app_state.app_dir.join("newest_groth16_proof_inner.json"), serde_json::to_string(&groth_inner).expect("could not json serialize new groth16 proof")) {
-            Ok(_) => println!("Successfully wrote newest_groth16_proof_inner.json"),
-            Err(e) => eprintln!("Failed to write newest_groth16_proof_inner.json: {}", e),
-        }
-        // Write a bincode version as well
-        match std::fs::write(app_state.app_dir.join("newest_groth16_proof_inner.bin"), bincode::serialize(&groth_inner).expect("could not json serialize new groth16 proof")) {
-            Ok(_) => println!("Successfully wrote newest_groth16_proof_inner.bin"),
-            Err(e) => eprintln!("Failed to write newest_groth16_proof_inner.bin: {}", e),
-        }
-        // update the values in the server state
-        *app_state.latest_groth16_header.lock().unwrap() = Some(header_to_try);
-        *app_state.latest_groth16_proof.lock().unwrap() = Some(resultant_groth16_proof);
-        println!("groth16 proved header height {:?}", app_state.newest_header.lock().unwrap().height());
+        elapsed_time = start_time.elapsed();
+        println!("elapsed time (groth16): {:?}", elapsed_time);
         let ten_mins = std::time::Duration::from_mins(10);
         let sleep_duration = ten_mins.saturating_sub(elapsed_time);
         std::thread::sleep(sleep_duration);
